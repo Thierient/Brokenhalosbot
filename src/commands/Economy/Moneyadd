@@ -1,0 +1,126 @@
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { successEmbed } from '../../utils/embeds.js';
+import { getEconomyData } from '../../utils/economy.js';
+import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHandler.js';
+import { logger } from '../../utils/logger.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
+import EconomyService from '../../services/economyService.js';
+
+const MAX_ADD_AMOUNT = 1_000_000;
+
+export default {
+    data: new SlashCommandBuilder()
+        .setName('money-add')
+        .setDescription("Add money to a user's wallet (Moderator only)")
+        .addUserOption(option =>
+            option
+                .setName('user')
+                .setDescription('User to give money to')
+                .setRequired(true)
+        )
+        .addIntegerOption(option =>
+            option
+                .setName('amount')
+                .setDescription('Amount to add')
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(MAX_ADD_AMOUNT)
+        )
+        .addStringOption(option =>
+            option
+                .setName('reason')
+                .setDescription('Reason for granting this money')
+                .setRequired(false)
+        )
+        // Only members with Moderate Members (Timeout Members) permission
+        // can see/use this command by default. Server admins can further
+        // restrict it via Integrations > App Permissions in Discord.
+        .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
+    category: 'Economy',
+
+    execute: withErrorHandling(async (interaction, config, client) => {
+        const deferred = await InteractionHelper.safeDefer(interaction);
+        if (!deferred) return;
+
+        const moderator = interaction.user;
+        const target = interaction.options.getUser('user');
+        const amount = interaction.options.getInteger('amount');
+        const reason = interaction.options.getString('reason') || 'No reason provided';
+        const guildId = interaction.guildId;
+
+        if (target.bot) {
+            throw createError(
+                'Cannot add money to bot',
+                ErrorTypes.VALIDATION,
+                'You cannot give money to a bot.',
+                { targetId: target.id, isBot: true }
+            );
+        }
+
+        logger.debug('[ECONOMY][MOD] money-add initiated', {
+            moderatorId: moderator.id,
+            targetId: target.id,
+            amount,
+            reason,
+            guildId,
+        });
+
+        const targetDataBefore = await getEconomyData(client, guildId, target.id);
+        if (!targetDataBefore) {
+            throw createError(
+                'Failed to load target economy data',
+                ErrorTypes.DATABASE,
+                "Failed to load that user's economy data. Please try again later.",
+                { userId: target.id, guildId }
+            );
+        }
+
+        const updatedData = await EconomyService.addMoney(
+            client,
+            guildId,
+            target.id,
+            amount,
+            `moderator_grant:${moderator.id}`
+        );
+
+        const embed = successEmbed(
+            '💰 Money Added',
+            `**${moderator.username}** gave **${target.username}** **$${amount.toLocaleString()}**.`
+        )
+            .addFields(
+                { name: 'Amount Added', value: `$${amount.toLocaleString()}`, inline: true },
+                { name: "User's New Balance", value: `$${updatedData.wallet.toLocaleString()}`, inline: true },
+                { name: 'Reason', value: reason, inline: false },
+            )
+            .setFooter({
+                text: `Granted by ${moderator.tag}`,
+                iconURL: moderator.displayAvatarURL(),
+            });
+
+        await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+
+        logger.info('[ECONOMY][MOD] money-add succeeded', {
+            moderatorId: moderator.id,
+            targetId: target.id,
+            amount,
+            reason,
+            guildId,
+            newBalance: updatedData.wallet,
+        });
+
+        try {
+            const { createEmbed } = await import('../../utils/embeds.js');
+            const dmEmbed = createEmbed({
+                title: '💰 You received money!',
+                description: `A moderator in **${interaction.guild.name}** gave you **$${amount.toLocaleString()}**.\n**Reason:** ${reason}`,
+            }).addFields({
+                name: 'Your New Balance',
+                value: `$${updatedData.wallet.toLocaleString()}`,
+                inline: true,
+            });
+            await target.send({ embeds: [dmEmbed] });
+        } catch (e) {
+            logger.warn(`Could not DM user ${target.id}: ${e.message}`);
+        }
+    }, { command: 'money-add' })
+};
