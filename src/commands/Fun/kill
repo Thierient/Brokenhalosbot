@@ -1,0 +1,66 @@
+import { SlashCommandBuilder } from 'discord.js';
+import { successEmbed, warningEmbed } from '../../utils/embeds.js';
+import { logger } from '../../utils/logger.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
+
+const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+const METHODS = [
+    "drops a piano on {target} from a rooftop",
+    "challenges {target} to a staring contest and wins so hard {target} evaporates",
+    "throws a rubber chicken at {target} with deadly precision",
+    "banishes {target} to the shadow realm",
+    "hits {target} with a fully loaded nerf blaster",
+    "trips {target} into a pool of spaghetti",
+    "summons a meteor that gently but firmly squashes {target}",
+    "out-memes {target} into non-existence",
+    "sends {target} a strongly worded email",
+    "unplugs {target}'s WiFi mid-game",
+];
+
+export default {
+    data: new SlashCommandBuilder()
+        .setName("kill")
+        .setDescription("A silly, harmless joke 'kill' on another server member.")
+        .addUserOption((option) =>
+            option
+                .setName("target")
+                .setDescription("The user to (playfully) take out")
+                .setRequired(true),
+        ),
+    category: 'Fun',
+
+    async execute(interaction, config, client) {
+        await InteractionHelper.safeDefer(interaction);
+
+        const author = interaction.user;
+        const target = interaction.options.getUser("target");
+
+        if (target.id === author.id) {
+            const embed = warningEmbed(
+                "💀 Nice Try",
+                `**${author.username}**, you can't target yourself with this one. Pick someone else!`
+            );
+            return await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+        }
+
+        if (target.bot) {
+            const embed = warningEmbed(
+                "💀 Invalid Target",
+                "Bots are immortal. Pick a real person to (playfully) get rid of."
+            );
+            return await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+        }
+
+        const method = METHODS[rand(0, METHODS.length - 1)]
+            .replaceAll("{target}", `**${target.username}**`);
+
+        const embed = successEmbed(
+            "💀 Elimination!",
+            `**${author.username}** ${method}. 😂\n\n*(Don't worry, ${target.username} respawns immediately.)*`
+        );
+
+        await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+        logger.debug(`Kill command executed by ${author.id} on ${target.id} in guild ${interaction.guildId}`);
+    },
+};
